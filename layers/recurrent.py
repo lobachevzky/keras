@@ -44,11 +44,13 @@ def time_distributed_dense(x, w, b=None, dropout=None,
     return x
 
 class Feedback(Layer):
-    def __init__(self, layers, output_length, feedback_function=lambda x: x,
+    def __init__(self, layer, output_length, feedback_function=lambda x: x,
                  unroll=False, name='feedback_layer', **kwargs):
-        if type(layers) not in (tuple, list):
-            layers = [layers]
-        self.layers = layers
+        self.layer = layer
+        try:
+           self.internal_layers = layer.layers
+        except AttributeError:
+            self.internal_layers = [layer]
         assert output_length > 0, "`output_length` must be longer than 0"
         self.output_length = output_length
         self.feedback_function = feedback_function
@@ -61,11 +63,11 @@ class Feedback(Layer):
     def build(self, input_shape):
         batch_size, output_dim = input_shape
         self.input_spec = None #[InputSpec(shape=input_shape, ndim=2)]
-        self.layers[0].batch_input_shape = (batch_size, 1, output_dim)
-        for layer in self.layers:
-            layer.return_sequences = True
+        # self.model.layers[0].batch_input_shape = (batch_size, 1, output_dim)
+        for layer in self.internal_layers:
+            if isinstance(layer, Recurrent):
+                layer.return_sequences = True
 
-        self.model = Sequential(self.layers)
         self.built = True
 
     def call(self, y, mask=None):
@@ -76,19 +78,20 @@ class Feedback(Layer):
         x = Reshape((1, input_dim))(y)
         if self.unroll:
             for i in range(self.output_length):
-                output = self.model(x)
+                output = self.layer(x)
                 x = self.feedback_function(output)
-                for layer in self.layers:
-                    layer.initial_state = layer.final_states
+                for layer in self.internal_layers:
+                    if isinstance(layer, Recurrent):
+                        layer.initial_state = layer.final_states
             return output
         else:
             def _step(tensor):
                 tensor._keras_shape = (batch_size, 1, input_dim)
-                # tensor._uses_learning_phase = x._uses_learning_phase
                 tensor._uses_learning_phase = False  # TODO: should this be hard-coded?
-                output = self.model(tensor)
-                for layer in self.layers:
-                    layer.initial_state = layer.final_states
+                output = self.layer(tensor)
+                for layer in self.internal_layers:
+                    if isinstance(layer, Recurrent):
+                        layer.initial_state = layer.final_states
                 output = T.patternbroadcast(output, tensor.broadcastable)
                 return output, self.feedback_function(output)
 
@@ -100,7 +103,7 @@ class Feedback(Layer):
 
     def get_output_shape_for(self, input_shape):
         batch_size, input_dim = input_shape
-        _, _, output_dim = self.layers[-1].get_output_shape_for((batch_size, 1, input_dim))
+        _, _, output_dim = self.layer.get_output_shape_for((batch_size, 1, input_dim))
         return (batch_size, self.output_length, output_dim)
 
 class Recurrent(Layer):
