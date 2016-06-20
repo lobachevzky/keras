@@ -77,13 +77,16 @@ class Feedback(Layer):
         batch_size, input_dim = y._keras_shape  # TODO: does y always have this attribute?
         x = Reshape((1, input_dim))(y)
         if self.unroll:
+            outputs = []
             for i in range(self.output_length):
                 output = self.layer(x)
+                # outputs.append(K.expand_dims(output, dim=1))
+                outputs.append(output)
                 x = self.feedback_function(output)
                 for layer in self.internal_layers:
                     if isinstance(layer, Recurrent):
                         layer.initial_state = layer.final_states
-            return output
+            return K.concatenate(outputs, axis=1)
         else:
             def _step(tensor):
                 tensor._keras_shape = (batch_size, 1, input_dim)
